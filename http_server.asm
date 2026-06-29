@@ -1,5 +1,6 @@
 %define SYS_READ        0
 %define SYS_WRITE       1
+%define SYS_OPEN        2
 %define SYS_CLOSE       3
 %define SYS_SOCKET      41
 %define SYS_ACCEPT      43
@@ -12,6 +13,7 @@
 %define SOCK_STREAM     1
 %define SOL_SOCKET      1
 %define SO_REUSEADDR    2
+%define O_RDONLY        0
 
 section .data
 
@@ -32,6 +34,10 @@ section .data
     path_root       db  "/", 0
     path_about      db  "/about", 0
 
+    file_index      db  "pages/index.html", 0
+    file_about      db  "pages/about.html", 0
+    file_404        db  "pages/404.html", 0
+
     resp_405_hdr:
         db  "HTTP/1.1 405 Method Not Allowed", 13, 10
         db  "Content-Type: text/plain", 13, 10
@@ -47,64 +53,6 @@ section .data
         db  13, 10
     resp_404_hdr_len equ $ - resp_404_hdr
 
-    page_404:
-        db  "<!DOCTYPE html>", 13, 10
-        db  "<html><head><meta charset='utf-8'>", 13, 10
-        db  "<title>404 - Page introuvable</title>", 13, 10
-        db  "<style>body{font-family:monospace;max-width:600px;margin:60px auto;", 13, 10
-        db  "background:#1e1e2e;color:#cdd6f4;}h1{color:#f38ba8;}</style></head>", 13, 10
-        db  "<body><h1>404 - Page introuvable</h1>", 13, 10
-        db  "<p>La page demandee n'existe pas sur ce serveur.</p>", 13, 10
-        db  "</body></html>", 13, 10
-    page_404_len    equ $ - page_404
-
-    page_index:
-        db  "<!DOCTYPE html>", 13, 10
-        db  "<html>", 13, 10
-        db  "<head>", 13, 10
-        db  "  <meta charset='utf-8'>", 13, 10
-        db  "  <title>Serveur HTTP ASM</title>", 13, 10
-        db  "  <style>", 13, 10
-        db  "    body { font-family: monospace; max-width: 600px;", 13, 10
-        db  "           margin: 60px auto; background: #1e1e2e; color: #cdd6f4; }", 13, 10
-        db  "    h1   { color: #89b4fa; }", 13, 10
-        db  "    p    { color: #a6e3a1; }", 13, 10
-        db  "    code { color: #f38ba8; }", 13, 10
-        db  "    a    { color: #89b4fa; }", 13, 10
-        db  "  </style>", 13, 10
-        db  "</head>", 13, 10
-        db  "<body>", 13, 10
-        db  "  <h1>Bonjour depuis l'assembleur !</h1>", 13, 10
-        db  "  <p>Ce serveur HTTP tourne en <code>NASM x86-64</code> pur.</p>", 13, 10
-        db  "  <p>Aucune libc, aucun framework — que des syscalls.</p>", 13, 10
-        db  "  <p><a href='/about'>A propos</a></p>", 13, 10
-        db  "</body>", 13, 10
-        db  "</html>", 13, 10
-    page_index_len  equ $ - page_index
-
-    page_about:
-        db  "<!DOCTYPE html>", 13, 10
-        db  "<html>", 13, 10
-        db  "<head>", 13, 10
-        db  "  <meta charset='utf-8'>", 13, 10
-        db  "  <title>A propos - Serveur HTTP ASM</title>", 13, 10
-        db  "  <style>", 13, 10
-        db  "    body { font-family: monospace; max-width: 600px;", 13, 10
-        db  "           margin: 60px auto; background: #1e1e2e; color: #cdd6f4; }", 13, 10
-        db  "    h1   { color: #89b4fa; }", 13, 10
-        db  "    p    { color: #a6e3a1; }", 13, 10
-        db  "    a    { color: #89b4fa; }", 13, 10
-        db  "  </style>", 13, 10
-        db  "</head>", 13, 10
-        db  "<body>", 13, 10
-        db  "  <h1>A propos</h1>", 13, 10
-        db  "  <p>Serveur HTTP ecrit en assembleur NASM x86-64 pour Linux.</p>", 13, 10
-        db  "  <p>Projet reseau — partiel assembleur.</p>", 13, 10
-        db  "  <p><a href='/'>Retour a l'accueil</a></p>", 13, 10
-        db  "</body>", 13, 10
-        db  "</html>", 13, 10
-    page_about_len  equ $ - page_about
-
     resp_200_hdr:
         db  "HTTP/1.1 200 OK", 13, 10
         db  "Content-Type: text/html; charset=utf-8", 13, 10
@@ -115,6 +63,7 @@ section .data
 section .bss
     req_buf     resb 4096
     path_buf    resb 256
+    file_buf    resb 8192
 
 section .text
     global _start
@@ -141,36 +90,79 @@ str_eq:
     xor     rax, rax
     ret
 
-; send_response — envoie en-tete 200 + corps HTML
-; entree : r13 = fd client, rsi = corps, rdx = taille corps
-send_response:
-    push    rsi
-    push    rdx
+; send_body — envoie en-tete HTTP + corps depuis file_buf
+; entree : r13 = fd client, r14 = taille corps, r15 = code en-tete (200 ou 404)
+send_body:
+    cmp     r15b, 4
+    je      .hdr_404
     mov     rax, SYS_WRITE
     mov     rdi, r13
     mov     rsi, resp_200_hdr
     mov     rdx, resp_200_hdr_len
     syscall
-    pop     rdx
-    pop     rsi
-    mov     rax, SYS_WRITE
-    mov     rdi, r13
-    syscall
-    ret
-
-; send_404 — envoie une page 404 personnalisee
-; entree : r13 = fd client
-send_404:
+    jmp     .write_body
+.hdr_404:
     mov     rax, SYS_WRITE
     mov     rdi, r13
     mov     rsi, resp_404_hdr
     mov     rdx, resp_404_hdr_len
     syscall
+.write_body:
     mov     rax, SYS_WRITE
     mov     rdi, r13
-    mov     rsi, page_404
-    mov     rdx, page_404_len
+    mov     rsi, file_buf
+    mov     rdx, r14
     syscall
+    ret
+
+; serve_file — lit un fichier HTML et l'envoie au client
+; entree : rdi = chemin fichier, r13 = fd client, r15b = code HTTP (0=200, 4=404)
+; sortie : rax = 0 si succes, rax = -1 si echec
+serve_file:
+    push    rdi
+    push    r15
+    mov     rax, SYS_OPEN
+    mov     rsi, O_RDONLY
+    xor     rdx, rdx
+    syscall
+    pop     r15
+    pop     rdi
+    test    rax, rax
+    js      .fail
+    mov     r14, rax
+
+    mov     rax, SYS_READ
+    mov     rdi, r14
+    mov     rsi, file_buf
+    mov     rdx, 8192
+    syscall
+    test    rax, rax
+    jle     .close_fail
+    mov     rbx, rax
+
+    mov     rax, SYS_CLOSE
+    mov     rdi, r14
+    syscall
+
+    mov     r14, rbx
+    call    send_body
+    xor     rax, rax
+    ret
+
+.close_fail:
+    mov     rax, SYS_CLOSE
+    mov     rdi, r14
+    syscall
+.fail:
+    mov     rax, -1
+    ret
+
+; send_404 — sert pages/404.html depuis le disque
+; entree : r13 = fd client
+send_404:
+    mov     rdi, file_404
+    mov     r15b, 4
+    call    serve_file
     ret
 
 ; route_request — dispatch selon le chemin extrait
@@ -190,15 +182,19 @@ route_request:
     ret
 
 .serve_index:
-    mov     rsi, page_index
-    mov     rdx, page_index_len
-    call    send_response
+    mov     rdi, file_index
+    xor     r15b, r15b
+    call    serve_file
+    test    rax, rax
+    jnz     send_404
     ret
 
 .serve_about:
-    mov     rsi, page_about
-    mov     rdx, page_about_len
-    call    send_response
+    mov     rdi, file_about
+    xor     r15b, r15b
+    call    serve_file
+    test    rax, rax
+    jnz     send_404
     ret
 
 ; parse_get — verifie "GET " et extrait le chemin dans path_buf
