@@ -28,6 +28,14 @@ section .data
     msg_start       db  "Serveur HTTP demarre sur le port 8080...", 10
     msg_start_len   equ $ - msg_start
 
+    log_prefix      db  "[LOG] GET ", 0
+    log_prefix_len  equ $ - log_prefix - 1
+
+    log_rejected    db  "[LOG] 405 Method Not Allowed", 10
+    log_rejected_len equ $ - log_rejected
+
+    newline         db  10
+
     str_get         db  "GET ", 0
     str_get_len     equ 4
 
@@ -67,6 +75,51 @@ section .bss
 
 section .text
     global _start
+
+; str_len — calcule la longueur d'une chaine null-terminee
+; entree : rdi = chaine
+; sortie : rax = longueur
+str_len:
+    xor     rax, rax
+.loop:
+    cmp     byte [rdi + rax], 0
+    je      .done
+    inc     rax
+    jmp     .loop
+.done:
+    ret
+
+; log_request — affiche la requete GET recue dans le terminal
+log_request:
+    mov     rax, SYS_WRITE
+    mov     rdi, 1
+    mov     rsi, log_prefix
+    mov     rdx, log_prefix_len
+    syscall
+
+    mov     rdi, path_buf
+    call    str_len
+    mov     rdx, rax
+    mov     rax, SYS_WRITE
+    mov     rdi, 1
+    mov     rsi, path_buf
+    syscall
+
+    mov     rax, SYS_WRITE
+    mov     rdi, 1
+    mov     rsi, newline
+    mov     rdx, 1
+    syscall
+    ret
+
+; log_rejected_request — affiche un rejet de methode non-GET
+log_rejected_request:
+    mov     rax, SYS_WRITE
+    mov     rdi, 1
+    mov     rsi, log_rejected
+    mov     rdx, log_rejected_len
+    syscall
+    ret
 
 ; str_eq — compare path_buf avec une chaine null-terminee
 ; entree : rdi = chaine attendue
@@ -307,10 +360,12 @@ _start:
     test    rax, rax
     jnz     .send_405
 
+    call    log_request
     call    route_request
     jmp     .close_conn
 
 .send_405:
+    call    log_rejected_request
     mov     rax, SYS_WRITE
     mov     rdi, r13
     mov     rsi, resp_405_hdr
