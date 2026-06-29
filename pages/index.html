@@ -16,6 +16,15 @@
   <h1>Bonjour depuis l'assembleur !</h1>
   <p>Ce serveur HTTP tourne en <code>NASM x86-64</code> pur.</p>
   <p>Aucune libc, aucun framework — que des syscalls.</p>
+  <form method="POST" action="/message" style="margin-top: 24px;">
+    <label for="msg">Envoyer un message :</label><br>
+    <input id="msg" name="msg" type="text" placeholder="Bonjour ASM"
+           style="margin: 8px 0; padding: 8px; width: 100%; box-sizing: border-box;
+                  background: #313244; color: #cdd6f4; border: 1px solid #45475a;">
+    <button type="submit"
+            style="padding: 8px 16px; background: #89b4fa; color: #1e1e2e;
+                   border: none; cursor: pointer;">POST</button>
+  </form>
   <p><a href="/about">A propos</a></p>
 </body>
 </html>

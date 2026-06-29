@@ -28,8 +28,14 @@ section .data
     msg_start       db  "Serveur HTTP demarre sur le port 8080...", 10
     msg_start_len   equ $ - msg_start
 
-    log_prefix      db  "[LOG] GET ", 0
-    log_prefix_len  equ $ - log_prefix - 1
+    log_prefix_get  db  "[LOG] GET ", 0
+    log_prefix_get_len equ $ - log_prefix_get - 1
+
+    log_prefix_post db  "[LOG] POST ", 0
+    log_prefix_post_len equ $ - log_prefix_post - 1
+
+    log_body_prefix db  " body=", 0
+    log_body_prefix_len equ $ - log_body_prefix - 1
 
     log_rejected    db  "[LOG] 405 Method Not Allowed", 10
     log_rejected_len equ $ - log_rejected
@@ -39,12 +45,20 @@ section .data
     str_get         db  "GET ", 0
     str_get_len     equ 4
 
+    str_post        db  "POST ", 0
+    str_post_len    equ 5
+
+    hdr_content_len db  "Content-Length: ", 0
+    hdr_content_len_len equ 16
+
     path_root       db  "/", 0
     path_about      db  "/about", 0
+    path_message    db  "/message", 0
 
     file_index      db  "pages/index.html", 0
     file_about      db  "pages/about.html", 0
     file_404        db  "pages/404.html", 0
+    file_post_ok    db  "pages/post_ok.html", 0
 
     resp_405_hdr:
         db  "HTTP/1.1 405 Method Not Allowed", 13, 10
@@ -69,9 +83,13 @@ section .data
     resp_200_hdr_len equ $ - resp_200_hdr
 
 section .bss
-    req_buf     resb 4096
-    path_buf    resb 256
-    file_buf    resb 8192
+    req_buf         resb 4096
+    path_buf        resb 256
+    file_buf        resb 8192
+    req_len         resq 1
+    method_is_post  resb 1
+    body_ptr        resq 1
+    body_len        resq 1
 
 section .text
     global _start
@@ -89,12 +107,19 @@ str_len:
 .done:
     ret
 
-; log_request — affiche la requete GET recue dans le terminal
+; log_request — affiche la methode, le chemin et le corps POST dans le terminal
 log_request:
+    cmp     byte [method_is_post], 1
+    je      .post_prefix
+    mov     rsi, log_prefix_get
+    mov     rdx, log_prefix_get_len
+    jmp     .write_prefix
+.post_prefix:
+    mov     rsi, log_prefix_post
+    mov     rdx, log_prefix_post_len
+.write_prefix:
     mov     rax, SYS_WRITE
     mov     rdi, 1
-    mov     rsi, log_prefix
-    mov     rdx, log_prefix_len
     syscall
 
     mov     rdi, path_buf
@@ -105,6 +130,24 @@ log_request:
     mov     rsi, path_buf
     syscall
 
+    cmp     byte [method_is_post], 1
+    jne     .newline
+    cmp     qword [body_len], 0
+    je      .newline
+
+    mov     rax, SYS_WRITE
+    mov     rdi, 1
+    mov     rsi, log_body_prefix
+    mov     rdx, log_body_prefix_len
+    syscall
+
+    mov     rax, SYS_WRITE
+    mov     rdi, 1
+    mov     rsi, [body_ptr]
+    mov     rdx, [body_len]
+    syscall
+
+.newline:
     mov     rax, SYS_WRITE
     mov     rdi, 1
     mov     rsi, newline
@@ -218,7 +261,26 @@ send_404:
     call    serve_file
     ret
 
-; route_request — dispatch selon le chemin extrait
+; route_post_request — dispatch des requetes POST
+; entree : r13 = fd client
+route_post_request:
+    mov     rdi, path_message
+    call    str_eq
+    test    rax, rax
+    jnz     .serve_post_ok
+
+    call    send_404
+    ret
+
+.serve_post_ok:
+    mov     rdi, file_post_ok
+    xor     r15b, r15b
+    call    serve_file
+    test    rax, rax
+    jnz     send_404
+    ret
+
+; route_request — dispatch des requetes GET
 ; entree : r13 = fd client
 route_request:
     mov     rdi, path_root
@@ -250,23 +312,166 @@ route_request:
     jnz     send_404
     ret
 
-; parse_get — verifie "GET " et extrait le chemin dans path_buf
-; sortie : rax = 0 si GET valide, rax = -1 sinon
-parse_get:
+; parse_content_length — lit Content-Length dans req_buf
+; sortie : rax = longueur du corps, 0 si absent
+parse_content_length:
+    mov     rsi, req_buf
+    mov     rcx, [req_len]
+.search:
+    cmp     rcx, hdr_content_len_len
+    jb      .not_found
+    mov     rdi, hdr_content_len
+    mov     rbx, hdr_content_len_len
+.cmp_hdr:
+    test    rbx, rbx
+    jz      .parse_digits
+    movzx   eax, byte [rsi]
+    movzx   edx, byte [rdi]
+    cmp     al, dl
+    jne     .next
+    inc     rsi
+    inc     rdi
+    dec     rbx
+    dec     rcx
+    jmp     .cmp_hdr
+.parse_digits:
+    xor     rax, rax
+.digit_loop:
+    cmp     rcx, 0
+    je      .done
+    movzx   edx, byte [rsi]
+    cmp     dl, '0'
+    jb      .done
+    cmp     dl, '9'
+    ja      .done
+    imul    rax, 10
+    sub     dl, '0'
+    add     rax, rdx
+    inc     rsi
+    dec     rcx
+    jmp     .digit_loop
+.next:
+    inc     rsi
+    dec     rcx
+    jmp     .search
+.not_found:
+    xor     rax, rax
+.done:
+    ret
+
+; find_body_start — trouve le debut du corps HTTP apres les en-tetes
+; sortie : rax = pointeur corps, rax = 0 si non trouve
+find_body_start:
+    mov     rsi, req_buf
+    mov     rcx, [req_len]
+    cmp     rcx, 4
+    jb      .not_found
+.scan:
+    cmp     byte [rsi], 13
+    jne     .advance
+    cmp     byte [rsi + 1], 10
+    jne     .advance
+    cmp     byte [rsi + 2], 13
+    jne     .advance
+    cmp     byte [rsi + 3], 10
+    jne     .advance
+    lea     rax, [rsi + 4]
+    ret
+.advance:
+    inc     rsi
+    dec     rcx
+    cmp     rcx, 4
+    jae     .scan
+.not_found:
+    xor     rax, rax
+    ret
+
+; read_post_body — lit le corps POST complet dans req_buf
+; entree : r13 = fd client
+read_post_body:
+    xor     qword [body_len], 0
+    xor     qword [body_ptr], 0
+
+    call    find_body_start
+    test    rax, rax
+    jz      .done
+    mov     rbx, rax
+
+    push    rbx
+    call    parse_content_length
+    pop     rbx
+    mov     r14, rax
+    test    r14, r14
+    jz      .done
+
+    mov     rax, rbx
+    sub     rax, req_buf
+    mov     rcx, [req_len]
+    sub     rcx, rax
+    jbe     .read_more
+    cmp     rcx, r14
+    cmova   rcx, r14
+    jmp     .store_body
+.read_more:
+    xor     rcx, rcx
+.store_body:
+
+    mov     [body_ptr], rbx
+    mov     [body_len], rcx
+
+    cmp     rcx, r14
+    jae     .done
+
+    mov     rsi, rbx
+    add     rsi, rcx
+    mov     rdx, r14
+    sub     rdx, rcx
+    mov     rax, SYS_READ
+    mov     rdi, r13
+    syscall
+    test    rax, rax
+    jle     .done
+    add     [body_len], rax
+    add     [req_len], rax
+.done:
+    ret
+
+; parse_request — verifie GET/POST et extrait le chemin dans path_buf
+; sortie : rax = 0 si methode supportee, rax = -1 sinon
+parse_request:
+    mov     byte [method_is_post], 0
+
     mov     rsi, req_buf
     mov     rdi, str_get
     mov     rcx, str_get_len
-.check_get:
+.check_method:
     test    rcx, rcx
     jz      .extract_path
     movzx   eax, byte [rsi]
     movzx   edx, byte [rdi]
     cmp     al, dl
-    jne     .not_get
+    jne     .try_post
     inc     rsi
     inc     rdi
     dec     rcx
-    jmp     .check_get
+    jmp     .check_method
+
+.try_post:
+    mov     byte [method_is_post], 1
+    mov     rsi, req_buf
+    mov     rdi, str_post
+    mov     rcx, str_post_len
+.check_post:
+    test    rcx, rcx
+    jz      .extract_path
+    movzx   eax, byte [rsi]
+    movzx   edx, byte [rdi]
+    cmp     al, dl
+    jne     .unsupported
+    inc     rsi
+    inc     rdi
+    dec     rcx
+    jmp     .check_post
 
 .extract_path:
     mov     rdi, path_buf
@@ -284,7 +489,7 @@ parse_get:
     cmp     al, 0
     je      .path_done
     cmp     rcx, 255
-    jae     .not_get
+    jae     .unsupported
     mov     [rdi], al
     inc     rsi
     inc     rdi
@@ -296,7 +501,7 @@ parse_get:
     xor     rax, rax
     ret
 
-.not_get:
+.unsupported:
     mov     rax, -1
     ret
 
@@ -355,13 +560,25 @@ _start:
     mov     rsi, req_buf
     mov     rdx, 4096
     syscall
+    test    rax, rax
+    jle     .close_conn
+    mov     [req_len], rax
 
-    call    parse_get
+    call    parse_request
     test    rax, rax
     jnz     .send_405
 
+    cmp     byte [method_is_post], 1
+    je      .handle_post
+
     call    log_request
     call    route_request
+    jmp     .close_conn
+
+.handle_post:
+    call    read_post_body
+    call    log_request
+    call    route_post_request
     jmp     .close_conn
 
 .send_405:
