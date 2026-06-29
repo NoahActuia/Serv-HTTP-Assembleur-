@@ -26,6 +26,17 @@ section .data
     msg_start       db  "Serveur HTTP demarre sur le port 8080...", 10
     msg_start_len   equ $ - msg_start
 
+    str_get         db  "GET ", 0
+    str_get_len     equ 4
+
+    resp_405_hdr:
+        db  "HTTP/1.1 405 Method Not Allowed", 13, 10
+        db  "Content-Type: text/plain", 13, 10
+        db  "Connection: close", 13, 10
+        db  13, 10
+        db  "405 Method Not Allowed", 13, 10
+    resp_405_len    equ $ - resp_405_hdr
+
     http_resp:
         db  "HTTP/1.1 200 OK", 13, 10
         db  "Content-Type: text/html; charset=utf-8", 13, 10
@@ -54,9 +65,61 @@ section .data
 
 section .bss
     req_buf     resb 4096
+    path_buf    resb 256
 
 section .text
     global _start
+
+; parse_get — verifie "GET " et extrait le chemin dans path_buf
+; entree : req_buf contient la requete
+; sortie : rax = 0 si GET valide, rax = -1 sinon
+parse_get:
+    mov     rsi, req_buf
+    mov     rdi, str_get
+    mov     rcx, str_get_len
+.check_get:
+    test    rcx, rcx
+    jz      .extract_path
+    movzx   eax, byte [rsi]
+    movzx   edx, byte [rdi]
+    cmp     al, dl
+    jne     .not_get
+    inc     rsi
+    inc     rdi
+    dec     rcx
+    jmp     .check_get
+
+.extract_path:
+    mov     rdi, path_buf
+    xor     rcx, rcx
+.copy_path:
+    movzx   eax, byte [rsi]
+    cmp     al, ' '
+    je      .path_done
+    cmp     al, '?'
+    je      .path_done
+    cmp     al, 13
+    je      .path_done
+    cmp     al, 10
+    je      .path_done
+    cmp     al, 0
+    je      .path_done
+    cmp     rcx, 255
+    jae     .not_get
+    mov     [rdi], al
+    inc     rsi
+    inc     rdi
+    inc     rcx
+    jmp     .copy_path
+
+.path_done:
+    mov     byte [rdi], 0
+    xor     rax, rax
+    ret
+
+.not_get:
+    mov     rax, -1
+    ret
 
 _start:
 
@@ -114,12 +177,25 @@ _start:
     mov     rdx, 4096
     syscall
 
+    call    parse_get
+    test    rax, rax
+    jnz     .send_405
+
     mov     rax, SYS_WRITE
     mov     rdi, r13
     mov     rsi, http_resp
     mov     rdx, http_resp_len
     syscall
+    jmp     .close_conn
 
+.send_405:
+    mov     rax, SYS_WRITE
+    mov     rdi, r13
+    mov     rsi, resp_405_hdr
+    mov     rdx, resp_405_len
+    syscall
+
+.close_conn:
     mov     rax, SYS_CLOSE
     mov     rdi, r13
     syscall
