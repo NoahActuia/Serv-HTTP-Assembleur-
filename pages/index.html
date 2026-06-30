@@ -1,30 +1,307 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
   <meta charset="utf-8">
-  <title>Serveur HTTP ASM</title>
-  <style>
-    body { font-family: monospace; max-width: 600px;
-           margin: 60px auto; background: #1e1e2e; color: #cdd6f4; }
-    h1   { color: #89b4fa; }
-    p    { color: #a6e3a1; }
-    code { color: #f38ba8; }
-    a    { color: #89b4fa; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>http_server.asm — Presentation live</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-  <h1>Bonjour depuis l'assembleur !</h1>
-  <p>Ce serveur HTTP tourne en <code>NASM x86-64</code> pur.</p>
-  <p>Aucune libc, aucun framework — que des syscalls.</p>
-  <form method="POST" action="/message" style="margin-top: 24px;">
-    <label for="msg">Envoyer un message :</label><br>
-    <input id="msg" name="msg" type="text" placeholder="Bonjour ASM"
-           style="margin: 8px 0; padding: 8px; width: 100%; box-sizing: border-box;
-                  background: #313244; color: #cdd6f4; border: 1px solid #45475a;">
-    <button type="submit"
-            style="padding: 8px 16px; background: #89b4fa; color: #1e1e2e;
-                   border: none; cursor: pointer;">POST</button>
-  </form>
-  <p><a href="/about">A propos</a></p>
+<body class="pres-mode">
+
+  <nav class="pres-nav">
+    <div class="inner">
+      <a href="#intro" class="logo">http_server.asm</a>
+      <div class="nav-links">
+        <a href="#intro">01 Intro</a>
+        <a href="#socket">02 Socket</a>
+        <a href="#boucle">03 Boucle</a>
+        <a href="#parsing">04 Parsing</a>
+        <a href="#routage">05 Routage</a>
+        <a href="#reponse">06 Reponse</a>
+        <a href="#bonus">07 Bonus</a>
+        <a href="#demo">08 Demo</a>
+      </div>
+      <span class="badge-live">LIVE</span>
+    </div>
+  </nav>
+
+  <!-- 01 INTRO -->
+  <section id="intro" class="slide slide-hero">
+    <div class="wrap-wide">
+      <span class="slide-num">01 / 08</span>
+      <h1 class="pres-title">Presentation du projet<br><span>via le code source</span></h1>
+      <p class="pres-subtitle">
+        On vous montre <strong>http_server.asm</strong> — ligne par ligne, bloc par bloc.
+        Pas de slides externes : c'est le serveur assembleur qui sert cette page.
+      </p>
+      <div class="code-ide code-ide-hero">
+        <div class="code-tab"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span> http_server.asm</div>
+        <pre class="code-src"><code><span class="code-row"><span class="ln">1</span><span class="lc"><span class="cm">; Serveur HTTP — NASM x86-64, Linux, syscalls only</span></span></span>
+<span class="code-row"><span class="ln">7</span><span class="lc"><span class="op">%define</span> <span class="nm">SYS_READ</span>   <span class="nu">0</span></span></span>
+<span class="code-row"><span class="ln">8</span><span class="lc"><span class="op">%define</span> <span class="nm">SYS_WRITE</span>  <span class="nu">1</span></span></span>
+<span class="code-row"><span class="ln">9</span><span class="lc"><span class="op">%define</span> <span class="nm">SYS_SOCKET</span> <span class="nu">41</span></span></span>
+<span class="code-row"><span class="ln">10</span><span class="lc"><span class="op">%define</span> <span class="nm">SYS_ACCEPT</span> <span class="nu">43</span></span></span>
+<span class="code-row"><span class="ln">11</span><span class="lc"><span class="op">%define</span> <span class="nm">SYS_BIND</span>   <span class="nu">49</span></span></span>
+<span class="code-row"><span class="ln">…</span><span class="lc"><span class="cm">; Pas de libc. Pas de malloc. Que des syscalls.</span></span></span></code></pre>
+      </div>
+      <a href="#socket" class="btn btn-primary btn-lg">Entrer dans le code →</a>
+    </div>
+  </section>
+
+  <!-- 02 SOCKET -->
+  <section id="socket" class="slide">
+    <div class="wrap-wide slide-split">
+      <div class="pres-voice">
+        <span class="slide-num">02 / 08</span>
+        <h2 class="pres-h2">_start — Ouvrir le socket</h2>
+        <p class="pres-say">« On commence par <code>_start</code>. On cree un socket TCP avec <code>SYS_SOCKET</code>, on active <code>SO_REUSEADDR</code> pour pouvoir relancer le serveur, puis <code>bind</code> sur le port 8080. »</p>
+        <ul class="pres-bullets">
+          <li><code>0x901F</code> = htons(8080) en network byte order</li>
+          <li><code>r12</code> = fd du socket serveur</li>
+          <li><code>listen</code> avec file d'attente de 10</li>
+        </ul>
+        <span class="pres-tag pres-tag-a">Noah — Reseau</span>
+      </div>
+      <div class="code-ide">
+        <div class="code-tab">http_server.asm — ligne 577</div>
+        <pre class="code-src"><code><span class="code-row hl"><span class="ln">580</span><span class="lc"><span class="nm">_start</span>:</span></span>
+<span class="code-row hl"><span class="ln">581</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rax</span>, <span class="nm">SYS_SOCKET</span></span></span>
+<span class="code-row hl"><span class="ln">582</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rdi</span>, <span class="nm">AF_INET</span></span></span>
+<span class="code-row hl"><span class="ln">583</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rsi</span>, <span class="nm">SOCK_STREAM</span></span></span>
+<span class="code-row"><span class="ln">584</span><span class="lc">    <span class="op">xor</span>     <span class="rg">rdx</span>, <span class="rg">rdx</span></span></span>
+<span class="code-row"><span class="ln">585</span><span class="lc">    <span class="op">syscall</span></span></span>
+<span class="code-row"><span class="ln">587</span><span class="lc">    <span class="op">mov</span>     <span class="rg">r12</span>, <span class="rg">rax</span>       <span class="cm">; fd socket</span></span></span>
+<span class="code-row"><span class="ln">597</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rax</span>, <span class="nm">SYS_BIND</span></span></span>
+<span class="code-row"><span class="ln">599</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rsi</span>, <span class="nm">srv_addr</span>  <span class="cm">; port 8080</span></span></span>
+<span class="code-row"><span class="ln">605</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rax</span>, <span class="nm">SYS_LISTEN</span></span></span>
+<span class="code-row"><span class="ln">607</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rsi</span>, <span class="nu">10</span></span></span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 BOUCLE -->
+  <section id="boucle" class="slide slide-alt">
+    <div class="wrap-wide slide-split">
+      <div class="pres-voice">
+        <span class="slide-num">03 / 08</span>
+        <h2 class="pres-h2">.loop — Accepter les clients</h2>
+        <p class="pres-say">« Ensuite une boucle infinie : <code>accept</code> bloque jusqu'a une connexion, on lit la requete dans <code>req_buf</code>, on appelle notre code HTTP, puis on ferme. »</p>
+        <ul class="pres-bullets">
+          <li><code>r13</code> = fd du client connecte</li>
+          <li><code>req_buf</code> = 4096 octets de requete brute</li>
+          <li>Puis <code>call parse_request</code></li>
+        </ul>
+        <span class="pres-tag pres-tag-a">Noah — Reseau</span>
+      </div>
+      <div class="code-ide">
+        <div class="code-tab">http_server.asm — ligne 618</div>
+        <pre class="code-src"><code><span class="code-row hl"><span class="ln">618</span><span class="lc"><span class="nm">.loop</span>:</span></span>
+<span class="code-row hl"><span class="ln">619</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rax</span>, <span class="nm">SYS_ACCEPT</span></span></span>
+<span class="code-row"><span class="ln">620</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rdi</span>, <span class="rg">r12</span></span></span>
+<span class="code-row"><span class="ln">626</span><span class="lc">    <span class="op">mov</span>     <span class="rg">r13</span>, <span class="rg">rax</span>       <span class="cm">; fd client</span></span></span>
+<span class="code-row hl"><span class="ln">628</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rax</span>, <span class="nm">SYS_READ</span></span></span>
+<span class="code-row"><span class="ln">630</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rsi</span>, <span class="nm">req_buf</span></span></span>
+<span class="code-row"><span class="ln">631</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rdx</span>, <span class="nu">4096</span></span></span>
+<span class="code-row"><span class="ln">635</span><span class="lc">    <span class="op">mov</span>     [<span class="nm">req_len</span>], <span class="rg">rax</span></span></span>
+<span class="code-row hl"><span class="ln">637</span><span class="lc">    <span class="op">call</span>    <span class="fn">parse_request</span></span></span>
+<span class="code-row hl"><span class="ln">645</span><span class="lc">    <span class="op">call</span>    <span class="fn">route_request</span></span></span>
+<span class="code-row"><span class="ln">663</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rax</span>, <span class="nm">SYS_CLOSE</span>  <span class="cm">; ferme client</span></span></span>
+<span class="code-row"><span class="ln">667</span><span class="lc">    <span class="op">jmp</span>     <span class="nm">.loop</span></span></span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 PARSING -->
+  <section id="parsing" class="slide">
+    <div class="wrap-wide slide-split">
+      <div class="pres-voice">
+        <span class="slide-num">04 / 08</span>
+        <h2 class="pres-h2">parse_request — Lire le GET</h2>
+        <p class="pres-say">« Ici on compare le debut de <code>req_buf</code> avec <code>"GET "</code> ou <code>"POST "</code>. Puis on copie le chemin caractere par caractere dans <code>path_buf</code> jusqu'a l'espace. »</p>
+        <ul class="pres-bullets">
+          <li>Entree : <code>req_buf</code> = <code>GET /about HTTP/1.1…</code></li>
+          <li>Sortie : <code>path_buf</code> = <code>"/about"</code></li>
+          <li>Si methode inconnue → <code>rax = -1</code> → 405</li>
+        </ul>
+        <span class="pres-tag pres-tag-b">Mathéo — HTTP</span>
+      </div>
+      <div class="code-ide">
+        <div class="code-tab">http_server.asm — ligne 503</div>
+        <pre class="code-src"><code><span class="code-row hl"><span class="ln">503</span><span class="lc"><span class="fn">parse_request</span>:</span></span>
+<span class="code-row"><span class="ln">507</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rsi</span>, <span class="nm">req_buf</span></span></span>
+<span class="code-row"><span class="ln">508</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rdi</span>, <span class="nm">str_get</span>   <span class="cm">; "GET "</span></span></span>
+<span class="code-row hl"><span class="ln">515</span><span class="lc">    <span class="op">cmp</span>     <span class="rg">al</span>, <span class="rg">dl</span>        <span class="cm">; compare octet par octet</span></span></span>
+<span class="code-row"><span class="ln">516</span><span class="lc">    <span class="op">jne</span>     <span class="nm">.try_post</span></span></span>
+<span class="code-row hl"><span class="ln">540</span><span class="lc"><span class="nm">.extract_path</span>:</span></span>
+<span class="code-row"><span class="ln">541</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rdi</span>, <span class="nm">path_buf</span></span></span>
+<span class="code-row hl"><span class="ln">545</span><span class="lc">    <span class="op">cmp</span>     <span class="rg">al</span>, <span class="str">' '</span>       <span class="cm">; fin du chemin</span></span></span>
+<span class="code-row"><span class="ln">557</span><span class="lc">    <span class="op">mov</span>     [<span class="rg">rdi</span>], <span class="rg">al</span>     <span class="cm">; copie dans path_buf</span></span></span>
+<span class="code-row"><span class="ln">564</span><span class="lc">    <span class="op">mov</span>     <span class="rg">byte</span> [<span class="rg">rdi</span>], <span class="nu">0</span>  <span class="cm">; null-terminate</span></span></span>
+<span class="code-row"><span class="ln">565</span><span class="lc">    <span class="op">xor</span>     <span class="rg">rax</span>, <span class="rg">rax</span>     <span class="cm">; succes</span></span></span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 ROUTAGE -->
+  <section id="routage" class="slide slide-alt">
+    <div class="wrap-wide slide-split">
+      <div class="pres-voice">
+        <span class="slide-num">05 / 08</span>
+        <h2 class="pres-h2">route_request — Choisir la page</h2>
+        <p class="pres-say">« On compare <code>path_buf</code> avec nos routes connues via <code>str_eq</code>. Si ca match, on ouvre le fichier HTML sur le disque. Sinon → <code>send_404</code>. »</p>
+        <ul class="pres-bullets">
+          <li><code>/</code> → <code>pages/index.html</code> (cette presentation)</li>
+          <li><code>/status</code> → JSON genere en memoire</li>
+          <li><code>/style.css</code> → CSS avec Content-Type adapte</li>
+        </ul>
+        <span class="pres-tag pres-tag-b">Mathéo — HTTP</span>
+      </div>
+      <div class="code-ide">
+        <div class="code-tab">http_server.asm — ligne 349</div>
+        <pre class="code-src"><code><span class="code-row hl"><span class="ln">349</span><span class="lc"><span class="fn">route_request</span>:</span></span>
+<span class="code-row"><span class="ln">350</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rdi</span>, <span class="nm">path_root</span>  <span class="cm">; "/"</span></span></span>
+<span class="code-row"><span class="ln">351</span><span class="lc">    <span class="op">call</span>    <span class="fn">str_eq</span></span></span>
+<span class="code-row"><span class="ln">353</span><span class="lc">    <span class="op">jnz</span>     <span class="nm">.serve_index</span></span></span>
+<span class="code-row"><span class="ln">355</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rdi</span>, <span class="nm">path_status</span></span></span>
+<span class="code-row"><span class="ln">358</span><span class="lc">    <span class="op">jnz</span>     <span class="fn">send_status</span></span></span>
+<span class="code-row"><span class="ln">363</span><span class="lc">    <span class="op">call</span>    <span class="fn">send_404</span></span></span>
+<span class="code-row hl"><span class="ln">367</span><span class="lc"><span class="nm">.serve_index</span>:</span></span>
+<span class="code-row"><span class="ln">368</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rdi</span>, <span class="nm">file_index</span></span></span>
+<span class="code-row"><span class="ln">370</span><span class="lc">    <span class="op">jmp</span>     <span class="fn">serve_path</span></span></span>
+<span class="code-row hl"><span class="ln">266</span><span class="lc"><span class="fn">serve_file</span>:</span></span>
+<span class="code-row"><span class="ln">269</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rax</span>, <span class="nm">SYS_OPEN</span>   <span class="cm">; open fichier</span></span></span>
+<span class="code-row"><span class="ln">279</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rax</span>, <span class="nm">SYS_READ</span>   <span class="cm">; lit dans file_buf</span></span></span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 REPONSE -->
+  <section id="reponse" class="slide">
+    <div class="wrap-wide slide-split">
+      <div class="pres-voice">
+        <span class="slide-num">06 / 08</span>
+        <h2 class="pres-h2">send_body — Reponse HTTP</h2>
+        <p class="pres-say">« On envoie d'abord le header pre-construit en <code>.data</code>, puis le corps HTML. Les <code>\r\n</code> sont les octets 13 et 10 — obligatoires en HTTP. »</p>
+        <ul class="pres-bullets">
+          <li>2 syscalls <code>write</code> sur le fd client (<code>r13</code>)</li>
+          <li>Header 200, 404, CSS ou JSON selon <code>r15b</code></li>
+          <li>C'est ce qui s'execute <strong>maintenant</strong> pour afficher cette page</li>
+        </ul>
+        <span class="pres-tag pres-tag-b">Mathéo — HTTP</span>
+      </div>
+      <div class="code-ide">
+        <div class="code-tab">http_server.asm — .data + send_body</div>
+        <pre class="code-src"><code><span class="code-row"><span class="ln">100</span><span class="lc">    <span class="nm">resp_200_hdr</span>:</span></span>
+<span class="code-row hl"><span class="ln">101</span><span class="lc">        <span class="op">db</span>  <span class="str">"HTTP/1.1 200 OK"</span>, <span class="nu">13</span>, <span class="nu">10</span></span></span>
+<span class="code-row"><span class="ln">102</span><span class="lc">        <span class="op">db</span>  <span class="str">"Content-Type: text/html"</span>, <span class="nu">13</span>, <span class="nu">10</span></span></span>
+<span class="code-row"><span class="ln">104</span><span class="lc">        <span class="op">db</span>  <span class="nu">13</span>, <span class="nu">10</span>              <span class="cm">; ligne vide = fin headers</span></span></span>
+<span class="code-row hl"><span class="ln">233</span><span class="lc"><span class="fn">send_body</span>:</span></span>
+<span class="code-row"><span class="ln">240</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rsi</span>, <span class="nm">resp_200_hdr</span></span></span>
+<span class="code-row hl"><span class="ln">255</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rax</span>, <span class="nm">SYS_WRITE</span>  <span class="cm">; 1. header</span></span></span>
+<span class="code-row"><span class="ln">256</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rdi</span>, <span class="rg">r13</span>        <span class="cm">; fd client</span></span></span>
+<span class="code-row hl"><span class="ln">259</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rax</span>, <span class="nm">SYS_WRITE</span>  <span class="cm">; 2. corps HTML</span></span></span>
+<span class="code-row"><span class="ln">261</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rsi</span>, <span class="nm">file_buf</span></span></span>
+<span class="code-row"><span class="ln">262</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rdx</span>, <span class="rg">r14</span>        <span class="cm">; taille lue</span></span></span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- 07 BONUS -->
+  <section id="bonus" class="slide slide-alt">
+    <div class="wrap-wide slide-split">
+      <div class="pres-voice">
+        <span class="slide-num">07 / 08</span>
+        <h2 class="pres-h2">Bonus — le code en plus</h2>
+        <p class="pres-say">« Au-dela du sujet, on a ajoute les logs dans le terminal, une 404 personnalisee, le POST, et plusieurs types MIME pour servir du CSS et du JSON. »</p>
+        <ul class="pres-bullets">
+          <li><code>log_request</code> → affiche <code>[LOG] GET /</code> a chaque requete</li>
+          <li><code>send_404</code> → sert <code>pages/404.html</code> depuis le disque</li>
+          <li><code>read_post_body</code> → lit le corps POST via Content-Length</li>
+          <li><code>r15b</code> choisit le header : HTML, CSS ou JSON</li>
+        </ul>
+        <div class="checklist checklist-lg" style="justify-content:flex-start;margin-top:24px">
+          <div class="check-item"><span class="check">✓</span> Routes multiples</div>
+          <div class="check-item"><span class="check">✓</span> Fichiers disque</div>
+          <div class="check-item"><span class="check">✓</span> Logs terminal</div>
+        </div>
+      </div>
+      <div class="code-ide">
+        <div class="code-tab">http_server.asm — bonus</div>
+        <pre class="code-src"><code><span class="code-row hl"><span class="ln">24</span><span class="lc"><span class="op">%define</span> <span class="nm">MIME_HTML</span>  <span class="nu">0</span>   <span class="cm">; text/html</span></span></span>
+<span class="code-row"><span class="ln">25</span><span class="lc"><span class="op">%define</span> <span class="nm">MIME_CSS</span>   <span class="nu">1</span>   <span class="cm">; text/css</span></span></span>
+<span class="code-row"><span class="ln">26</span><span class="lc"><span class="op">%define</span> <span class="nm">MIME_PLAIN</span> <span class="nu">2</span>   <span class="cm">; application/json</span></span></span>
+<span class="code-row hl"><span class="ln">168</span><span class="lc"><span class="fn">log_request</span>:</span></span>
+<span class="code-row"><span class="ln">169</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rsi</span>, <span class="nm">log_prefix_get</span></span></span>
+<span class="code-row"><span class="ln">177</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rsi</span>, <span class="nm">path_buf</span>  <span class="cm">; affiche le chemin</span></span></span>
+<span class="code-row hl"><span class="ln">305</span><span class="lc"><span class="fn">send_404</span>:</span></span>
+<span class="code-row"><span class="ln">306</span><span class="lc">    <span class="op">mov</span>     <span class="rg">rdi</span>, <span class="nm">file_404</span></span></span>
+<span class="code-row"><span class="ln">307</span><span class="lc">    <span class="op">mov</span>     <span class="rg">r15b</span>, <span class="nm">MIME_404</span></span></span>
+<span class="code-row"><span class="ln">308</span><span class="lc">    <span class="op">call</span>    <span class="fn">serve_file</span></span></span>
+<span class="code-row hl"><span class="ln">648</span><span class="lc"><span class="nm">.handle_post</span>:</span></span>
+<span class="code-row"><span class="ln">649</span><span class="lc">    <span class="op">call</span>    <span class="fn">read_post_body</span></span></span>
+<span class="code-row"><span class="ln">651</span><span class="lc">    <span class="op">call</span>    <span class="fn">route_post_request</span></span></span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- 08 DEMO + CONCLUSION -->
+  <section id="demo" class="slide">
+    <div class="wrap-wide slide-split">
+      <div class="pres-voice">
+        <span class="slide-num">08 / 08</span>
+        <h2 class="pres-h2">Demo live</h2>
+        <p class="pres-say">« Cette presentation est servie par le code qu'on vient de vous montrer. Lancez le serveur, testez avec curl, ou envoyez un POST ci-dessous. »</p>
+        <div class="code-ide code-ide-terminal">
+          <div class="code-tab">terminal</div>
+          <pre class="code-src"><code><span class="code-row"><span class="lc">$ <span class="fn">make</span> && <span class="fn">./http_server</span></span></span>
+<span class="code-row"><span class="lc">Serveur HTTP demarre sur le port 8080...</span></span>
+<span class="code-row"><span class="lc">$ <span class="fn">curl</span> http://localhost:8080/status</span></span>
+<span class="code-row"><span class="lc">{"status":"online","server":"ASM-HTTP/1.1"...}</span></span>
+<span class="code-row"><span class="lc">$ <span class="fn">curl</span> http://localhost:8080/style.css</span></span></code></pre>
+        </div>
+        <form method="POST" action="/message" class="demo-form">
+          <input name="msg" type="text" placeholder="Test POST /message..." required>
+          <button type="submit" class="btn btn-primary">Envoyer POST</button>
+        </form>
+      </div>
+      <div class="pres-voice pres-conclusion-box">
+        <h2 class="pres-h2">Conclusion</h2>
+        <p class="pres-say">« ~670 lignes d'assembleur NASM. Zero libc. Toutes les exigences obligatoires et tous les bonus du sujet sont implementes. »</p>
+        <div class="stats stats-conclusion">
+          <div class="stat"><strong>5</strong><span>obligatoires</span></div>
+          <div class="stat"><strong>3</strong><span>bonus</span></div>
+          <div class="stat"><strong>10+</strong><span>syscalls</span></div>
+        </div>
+        <div class="split-table" style="max-width:100%;margin:28px 0">
+          <div class="split-col">
+            <h3>Noah — Reseau</h3>
+            <ul>
+              <li>Socket, bind, listen</li>
+              <li>Boucle accept/read</li>
+              <li>Logs terminal</li>
+            </ul>
+          </div>
+          <div class="split-col split-col-b">
+            <h3>Mathéo — HTTP</h3>
+            <ul>
+              <li>Parsing &amp; routage</li>
+              <li>Headers &amp; fichiers</li>
+              <li>Cette presentation</li>
+            </ul>
+          </div>
+        </div>
+        <h3 class="pres-questions">Merci — Des questions ?</h3>
+        <div class="cta-row">
+          <a href="#intro" class="btn btn-ghost btn-lg">Revoir</a>
+          <a href="/status" class="btn btn-primary btn-lg">{ } /status</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="pres-footer">
+    <code>http_server.asm</code> — servi par le serveur qu'il decrit — port 8080
+  </footer>
+
 </body>
 </html>

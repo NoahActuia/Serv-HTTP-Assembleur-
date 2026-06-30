@@ -1,19 +1,30 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
   <meta charset="utf-8">
-  <title>404 - Page introuvable</title>
-  <style>
-    body { font-family: monospace; max-width: 600px;
-           margin: 60px auto; background: #1e1e2e; color: #cdd6f4; }
-    h1   { color: #f38ba8; }
-    p    { color: #a6e3a1; }
-    a    { color: #89b4fa; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>404 — ASM HTTP</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <h1>404 - Page introuvable</h1>
-  <p>La page demandee n'existe pas sur ce serveur.</p>
-  <p><a href="/">Retour a l'accueil</a></p>
+  <nav class="pres-nav">
+    <div class="inner">
+      <a href="/#intro" class="logo">ASM HTTP</a>
+      <div class="nav-links">
+        <a href="/#intro">Retour presentation</a>
+      </div>
+    </div>
+  </nav>
+
+  <section class="slide">
+    <div class="wrap" style="text-align:center">
+      <div class="error-code">404</div>
+      <h1 style="margin-bottom:16px">Page introuvable</h1>
+      <p style="color:var(--muted);max-width:440px;margin:0 auto 32px">
+        Cette route n'existe pas. Revenez a la presentation.
+      </p>
+      <a href="/" class="btn btn-primary">Accueil</a>
+    </div>
+  </section>
 </body>
 </html>
