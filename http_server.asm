@@ -21,10 +21,11 @@
 %define SO_REUSEADDR    2
 %define O_RDONLY        0
 
-%define MIME_HTML       0
-%define MIME_CSS        1
-%define MIME_PLAIN      2
-%define MIME_404        4
+; types de reponse HTTP - ça envoie un dès header HTTP que ce soit HTML, CSS, JSON ou 404
+%define MIME_HTML       0       ; pages HTML 
+%define MIME_CSS        1       ; feuille de style
+%define MIME_PLAIN      2       ; JSON sur /status
+%define MIME_404        4       ; page 404
 
 ; ------------------------------------------------------------
 ;  Donnees fixes : config reseau, messages, routes, reponses
@@ -58,32 +59,39 @@ section .data
 
     newline         db  10
 
-    ; ce qu'on attend au debut de la premiere ligne HTTP
+    ; --------------------------------------------------------
+    ; constantes pour parser et router les requetes HTTP
+    ; --------------------------------------------------------
+
+    ; texte attendu au début de la requête : "GET /" ou "POST /"
     str_get         db  "GET ", 0
     str_get_len     equ 4
 
     str_post        db  "POST ", 0
     str_post_len    equ 5
 
+    ; pour lire la taille du corps POST dans les headers
     hdr_content_len db  "Content-Length: ", 0
     hdr_content_len_len equ 16
 
-    ; routes qu'on gere
+    ; URLs qu'on reconnait (comparees avec path_buf apres parsing)
     path_root       db  "/", 0
     path_status     db  "/status", 0
     path_css        db  "/style.css", 0
     path_message    db  "/message", 0
 
-    ; fichiers servis depuis le disque
+    ; chemins des fichiers lus sur le disque (qui fait partie du bonus du sujet)
     file_index      db  "pages/index.html", 0
     file_404        db  "pages/404.html", 0
     file_post_ok    db  "pages/post_ok.html", 0
     file_css        db  "pages/style.css", 0
 
+    ; reponse JSON de /status (pas de fichier, copie directe en memoire)
     status_body     db  '{"status":"online","server":"ASM-HTTP/1.1","port":8080}', 0
     status_body_len equ $ - status_body - 1
 
-    ; reponses HTTP pre-construites (13,10 = \r\n)
+    ; headers HTTP deja ecrits en .data — on evite de les construire a la volee
+    ; 13,10 = \r\n obligatoire en HTTP entre chaque ligne
     resp_405_hdr:
         db  "HTTP/1.1 405 Method Not Allowed", 13, 10
         db  "Content-Type: text/plain", 13, 10
@@ -124,19 +132,21 @@ section .data
 ;  Variables non initialisees (buffers + etat de la requete)
 ; ------------------------------------------------------------
 section .bss
-    req_buf         resb 4096     ; requete HTTP brute recue du client
-    path_buf        resb 256      ; chemin extrait, ex: "/about"
-    file_buf        resb 32768    ; contenu du fichier HTML/CSS avant envoi
-    req_len         resq 1        ; nb d'octets lus dans req_buf
-    method_is_post  resb 1        ; 0 = GET, 1 = POST
-    body_ptr        resq 1        ; pointeur vers le corps POST dans req_buf
-    body_len        resq 1        ; taille du corps POST
+    req_buf         resb 4096     ;  requete brute lue depuis le client
+    path_buf        resb 256      ;  chemin extrait par parse_request
+    file_buf        resb 32768    ;  contenu HTML/CSS avant envoi au client
+    req_len         resq 1        ;  nb d'octets dans req_buf
+    method_is_post  resb 1        ;  0=GET, 1=POST
+    body_ptr        resq 1        ;  ou commence le corps POST
+    body_len        resq 1        ;  taille du corps POST
 
 section .text
     global _start
 
 ; ------------------------------------------------------------
-;  Petits utilitaires chaines (pas de libc donc je les fais moi)
+;  utilitaires chaines — pas de libc donc pas de strlen/strcmp
+; str_len  : rdi=chaine -> rax=longueur
+; str_eq   : rdi=chaine attendue, compare avec path_buf -> rax=1 si egal
 ; ------------------------------------------------------------
 str_len:
     xor     rax, rax
@@ -149,7 +159,7 @@ str_len:
     ret
 
 str_eq:
-    mov     rsi, path_buf
+    mov     rsi, path_buf           ; toujours path_buf vs la route attendue
 .loop:
     movzx   eax, byte [rsi]
     movzx   edx, byte [rdi]
@@ -227,10 +237,12 @@ log_rejected_request:
     ret
 
 ; ------------------------------------------------------------
-;  Envoi des reponses : lire un fichier HTML puis l'envoyer
-;  au client avec le bon header HTTP (200 ou 404)
+;  reponse HTTP : header + corps vers le client (fd dans r13)
+; r14 = taille du corps, r15b = type MIME (HTML/CSS/JSON/404)
+; obligatoire sujet : HTTP/1.1 200 OK + page HTML
 ; ------------------------------------------------------------
 send_body:
+    ; choisir le bon header selon le type de contenu
     cmp     r15b, MIME_404
     je      .hdr_404
     cmp     r15b, MIME_CSS
@@ -253,9 +265,10 @@ send_body:
     mov     rdx, resp_404_hdr_len
 .write_hdr:
     mov     rax, SYS_WRITE
-    mov     rdi, r13
+    mov     rdi, r13                ; fd du client (fourni par Noah)
     syscall
 .write_body:
+    ; 2e write : le contenu (HTML, CSS ou JSON) depuis file_buf
     mov     rax, SYS_WRITE
     mov     rdi, r13
     mov     rsi, file_buf
@@ -263,6 +276,9 @@ send_body:
     syscall
     ret
 
+;  bonus sujet : lire un fichier externe depuis le disque
+; rdi = chemin ("pages/index.html"), r15b = type MIME
+; open -> read dans file_buf -> send_body
 serve_file:
     push    rdi
     push    r15
@@ -289,9 +305,9 @@ serve_file:
     mov     rdi, r14
     syscall
 
-    mov     r14, rbx
+    mov     r14, rbx                ; r14 = nb octets lus (taille du corps)
     call    send_body
-    xor     rax, rax
+    xor     rax, rax                ; 0 = succes
     ret
 
 .close_fail:
@@ -302,21 +318,21 @@ serve_file:
     mov     rax, -1
     ret
 
+;  bonus : page 404 personnalisee depuis pages/404.html
 send_404:
     mov     rdi, file_404
     mov     r15b, MIME_404
     call    serve_file
     ret
 
-; serve_path — lit un fichier et l'envoie, sinon 404
-; entree : rdi = chemin, r15b = type MIME
+;  wrapper : si serve_file echoue (fichier introuvable) -> 404
 serve_path:
     call    serve_file
     test    rax, rax
     jnz     send_404
     ret
 
-; send_status — endpoint JSON /status sans fichier externe
+;  /status : copie le JSON en memoire puis send_body (pas de open)
 send_status:
     mov     rdi, file_buf
     mov     rsi, status_body
@@ -330,7 +346,9 @@ send_status:
     ret
 
 ; ------------------------------------------------------------
-;  Routage : presentation sur /, API /status, CSS, POST /message
+;  routage — bonus routes multiples
+; compare path_buf avec chaque route connue via str_eq
+; GET : /, /status, /style.css  |  POST : /message
 ; ------------------------------------------------------------
 route_post_request:
     mov     rdi, path_message
@@ -347,6 +365,7 @@ route_post_request:
     jmp     serve_path
 
 route_request:
+    ; chaine de if/else : path_buf == "/" ? /status ? /style.css ? sinon 404
     mov     rdi, path_root
     call    str_eq
     test    rax, rax
@@ -376,11 +395,12 @@ route_request:
     jmp     serve_path
 
 ; ------------------------------------------------------------
-;  Parsing HTTP : extraire methode, chemin, et corps POST
-;  je cherche Content-Length dans les headers puis je lis
-;  le reste du body si tout n'est pas arrive d'un coup
+;  parsing HTTP — obligatoire sujet
+; parse_request     : lit GET/POST, remplit path_buf
+; parse_content_length / find_body_start / read_post_body : gestion POST
 ; ------------------------------------------------------------
 parse_content_length:
+    ; cherche "Content-Length: " dans req_buf et lit le nombre
     mov     rsi, req_buf
     mov     rcx, [req_len]
 .search:
@@ -425,6 +445,7 @@ parse_content_length:
 .done:
     ret
 
+; trouve \r\n\r\n dans les headers = tout ce qui suit = corps POST
 find_body_start:
     mov     rsi, req_buf
     mov     rcx, [req_len]
@@ -450,6 +471,7 @@ find_body_start:
     xor     rax, rax
     ret
 
+; assemble le corps POST complet (parfois 2 read si coupe en deux paquets)
 read_post_body:
     xor     qword [body_len], 0
     xor     qword [body_ptr], 0
@@ -500,6 +522,10 @@ read_post_body:
 .done:
     ret
 
+;  coeur du sujet — verifie GET ou POST, extrait le chemin URL
+; entree : req_buf rempli par Noah
+; sortie : rax=0 si OK, rax=-1 si methode inconnue (-> 405)
+; effet  : path_buf = "/status" par exemple
 parse_request:
     mov     byte [method_is_post], 0
 
@@ -536,7 +562,7 @@ parse_request:
     dec     rcx
     jmp     .check_post
 
-    ; on recupere le chemin entre la methode et le HTTP/1.1
+    ; copie caractere par caractere jusqu'a espace, ? ou fin de ligne
 .extract_path:
     mov     rdi, path_buf
     xor     rcx, rcx
@@ -634,28 +660,29 @@ _start:
     jle     .close_conn
     mov     [req_len], rax
 
-    call    parse_request
+    ; =====  couche HTTP — appelee apres le read de Noah =====
+    call    parse_request           ; lit methode + chemin dans path_buf
     test    rax, rax
-    jnz     .send_405              ; PUT, DELETE, etc.
+    jnz     .send_405              ; PUT, DELETE... -> header 405
 
     cmp     byte [method_is_post], 1
     je      .handle_post
 
-    call    log_request
-    call    route_request
+    call    log_request             ;  affiche [LOG] GET /...
+    call    route_request           ;  choisit et envoie la page
     jmp     .close_conn
 
 .handle_post:
-    call    read_post_body
+    call    read_post_body          ;  lit le corps du formulaire
     call    log_request
-    call    route_post_request
+    call    route_post_request      ;  repond a POST /message
     jmp     .close_conn
 
 .send_405:
     call    log_rejected_request
     mov     rax, SYS_WRITE
     mov     rdi, r13
-    mov     rsi, resp_405_hdr
+    mov     rsi, resp_405_hdr       ;  header 405 en .data
     mov     rdx, resp_405_len
     syscall
 
